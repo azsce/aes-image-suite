@@ -192,13 +192,6 @@ export const KeyInputSection = React.memo(
         setUploadedFileName(null);
       };
 
-      const handleKeySizeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        const newSize = parseInt(e.target.value, 10) as KeySize;
-        if (onKeySizeChange) {
-          onKeySizeChange(newSize);
-        }
-      };
-
       const handleGenerateIV = () => {
         const newIV = generateIV();
         onIVChange(newIV);
@@ -266,25 +259,23 @@ export const KeyInputSection = React.memo(
             {/* Key Size Selector */}
             {(showKeySizeSelector ?? showGenerate) && (
               <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="key-size-select">
-                  Key Size
-                </label>
-                <select
-                  id="key-size-select"
-                  value={keySize}
-                  onChange={handleKeySizeChange}
-                  disabled={disabled}
-                  className={cn(
-                    "w-full px-3 py-3 sm:py-2 text-base sm:text-sm rounded-md border bg-background min-h-[44px]",
-                    "focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-                    "disabled:cursor-not-allowed disabled:opacity-50"
-                  )}
-                  aria-label="Select key size"
-                >
-                  <option value="128">AES-128 (128-bit)</option>
-                  <option value="192">AES-192 (192-bit)</option>
-                  <option value="256">AES-256 (256-bit)</option>
-                </select>
+                <label className="text-sm font-medium">Key Size</label>
+                <div className="flex gap-2">
+                  {([128, 192, 256] as KeySize[]).map(size => (
+                    <Button
+                      key={size}
+                      type="button"
+                      variant={keySize === size ? "default" : "outline"}
+                      onClick={() => onKeySizeChange?.(size)}
+                      disabled={disabled}
+                      className="flex-1 min-h-[44px]"
+                      aria-pressed={keySize === size}
+                      aria-label={`AES-${String(size)} (${String(size)}-bit)`}
+                    >
+                      {size}
+                    </Button>
+                  ))}
+                </div>
                 <p className="text-xs text-muted-foreground">Select the AES key size for encryption</p>
               </div>
             )}
@@ -293,7 +284,7 @@ export const KeyInputSection = React.memo(
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium" htmlFor="key-input">
-                  Key ({keySize}-bit)
+                  Key ({String(keySize)}-bit)
                 </label>
                 <span
                   className={cn(
@@ -326,7 +317,7 @@ export const KeyInputSection = React.memo(
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <p id="key-help" className="text-xs text-muted-foreground">
-                    {keyMaxLength} hexadecimal characters (0-9, a-f)
+                    {String(keyMaxLength)} hexadecimal characters (0-9, a-f)
                   </p>
                   {keyValue && !keyValidation.isValid && keyValidation.error && (
                     <p id="key-validation" className="text-xs text-destructive flex items-center gap-1 mt-1">

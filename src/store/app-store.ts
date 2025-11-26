@@ -44,12 +44,11 @@ const initialDecryptionState: DecryptionState = {
   key: "",
   iv: "",
   encryptedImage: null,
-  decryptedImage: null,
   encryptedBits: null,
-  decryptedBits: null,
   metadata: null,
   isProcessing: false,
   error: null,
+  currentCache: null,
 };
 
 /**
@@ -284,6 +283,7 @@ export const useAppStore = create<AppStore>()(
           decryption: {
             ...state.decryption,
             key,
+            currentCache: null, // Clear cache when key changes
           },
         }));
       },
@@ -293,6 +293,7 @@ export const useAppStore = create<AppStore>()(
           decryption: {
             ...state.decryption,
             iv,
+            currentCache: null, // Clear cache when IV changes
           },
         }));
       },
@@ -306,29 +307,12 @@ export const useAppStore = create<AppStore>()(
         }));
       },
 
-      setDecryptedImage: (image: string | null) => {
-        set(state => ({
-          decryption: {
-            ...state.decryption,
-            decryptedImage: image,
-          },
-        }));
-      },
-
       setEncryptedBitsForDecryption: (bits: Uint8Array | null) => {
         set(state => ({
           decryption: {
             ...state.decryption,
             encryptedBits: bits,
-          },
-        }));
-      },
-
-      setDecryptedBits: (bits: Uint8Array | null) => {
-        set(state => ({
-          decryption: {
-            ...state.decryption,
-            decryptedBits: bits,
+            currentCache: null, // Clear cache when encrypted image changes
           },
         }));
       },
@@ -362,6 +346,112 @@ export const useAppStore = create<AppStore>()(
 
       resetDecryption: () => {
         set({ decryption: initialDecryptionState });
+      },
+
+      setDecryptionCache: cache => {
+        set(state => ({
+          decryption: {
+            ...state.decryption,
+            currentCache: cache,
+          },
+        }));
+      },
+
+      updateDecryptionCacheResult: (method, result) => {
+        set(state => {
+          const currentCache = state.decryption.currentCache;
+
+          if (!currentCache) {
+            // Should not happen - cache should be initialized before updating
+            logger.log("[Store] Cannot update decryption cache - no cache exists");
+            return state;
+          }
+
+          logger.log("[Store] Updating decryption cache result", {
+            method,
+            cacheKey: currentCache.cacheKey,
+            url: result.decryptedImage,
+          });
+
+          // Create a deep copy of the cache
+          const updatedCache = {
+            ...currentCache,
+            results: {
+              ...currentCache.results,
+              [method]: result,
+            },
+          };
+
+          logger.log("[Store] Decryption cache updated", {
+            cacheKey: updatedCache.cacheKey,
+            resultCount: Object.keys(updatedCache.results).length,
+          });
+
+          return {
+            decryption: {
+              ...state.decryption,
+              currentCache: updatedCache,
+            },
+          };
+        });
+      },
+
+      updateDecryptionCacheComparison: (method, comparison) => {
+        set(state => {
+          const currentCache = state.decryption.currentCache;
+
+          if (!currentCache) {
+            logger.log("[Store] Cannot update decryption cache comparison - no cache exists");
+            return state;
+          }
+
+          // Handle clearing comparison result
+          if (comparison === null) {
+            logger.log("[Store] Clearing decryption cache comparison", {
+              method,
+              cacheKey: currentCache.cacheKey,
+            });
+
+            const { [method]: _, ...remainingComparisons } = currentCache.comparisons;
+
+            return {
+              decryption: {
+                ...state.decryption,
+                currentCache: {
+                  ...currentCache,
+                  comparisons: remainingComparisons,
+                },
+              },
+            };
+          }
+
+          logger.log("[Store] Updating decryption cache comparison", {
+            method,
+            cacheKey: currentCache.cacheKey,
+            comparisonImageHash: comparison.comparisonImageHash,
+            identical: comparison.result.identical,
+          });
+
+          const updatedCache = {
+            ...currentCache,
+            comparisons: {
+              ...currentCache.comparisons,
+              [method]: comparison,
+            },
+          };
+
+          logger.log("[Store] Decryption cache comparison updated", {
+            cacheKey: updatedCache.cacheKey,
+            comparisonCount: Object.keys(updatedCache.comparisons).length,
+          });
+
+          return {
+            decryption: {
+              ...state.decryption,
+              currentCache: updatedCache,
+            },
+          };
+        });
       },
 
       // Comparison actions

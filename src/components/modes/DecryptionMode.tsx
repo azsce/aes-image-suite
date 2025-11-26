@@ -15,35 +15,98 @@ import { createImageBlobUrl } from "@/utils/imageProcessor";
 import { hexToBytes } from "@/utils/hexUtils";
 import { downloadImage, generateFilename } from "@/utils/downloadHelper";
 import { compareImageBits } from "@/utils/imageComparison";
+import { generateCacheKey } from "@/utils/cacheKeyGenerator";
 import { cn } from "@/lib/utils";
 import type { WorkerMessage } from "@/types/crypto.types";
-import type { ComparisonResult as ComparisonResultType } from "@/types/store.types";
+import type { EncryptionMethod, DecryptedResult } from "@/types/store.types";
 import { logger } from "@/utils/logger";
 
 /**
- * Handle successful decryption result
+ * Create SVG error placeholder for failed decryption
  *
- * LOSSLESS DECRYPTION: After decryption, the recovered bits are used to
- * create a Blob URL with the original MIME type (from stored metadata).
- * This ensures the browser correctly interprets the file format, and the
- * result is bit-identical to the original file before encryption.
+ * Generates an SVG image with the error message displayed in red text
+ * on a neutral gray background that works in both light and dark modes.
+ *
+ * @param errorMessage - The error message to display
+ * @param width - Image width (default 400)
+ * @param height - Image height (default 300)
+ * @returns Data URL of SVG error placeholder
+ */
+function createDecryptionErrorSvg(errorMessage: string, width = 400, height = 300): string {
+  // Escape special characters for SVG
+  const escapedMessage = errorMessage
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+  // Split message into lines for better display (max ~40 chars per line)
+  const words = escapedMessage.split(" ");
+  const lines: string[] = [];
+  let currentLine = "";
+  
+  for (const word of words) {
+    if ((currentLine + " " + word).length > 40) {
+      if (currentLine) lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = currentLine ? `${currentLine} ${word}` : word;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+
+  // Generate text elements for each line
+  const lineHeight = 24;
+  const startY = height / 2 - ((lines.length - 1) * lineHeight) / 2;
+  const textElements = lines
+    .map(
+      (line, index) => `
+      <text 
+        x="50%" 
+        y="${String(startY + index * lineHeight)}" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="14" 
+        fill="#dc2626" 
+        text-anchor="middle"
+        dominant-baseline="middle"
+      >${line}</text>`
+    )
+    .join("");
+
+  const svg = `
+    <svg width="${String(width)}" height="${String(height)}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="#374151"/>
+      <text 
+        x="50%" 
+        y="${String(startY - 40)}" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="32" 
+        fill="#ef4444" 
+        text-anchor="middle"
+        dominant-baseline="middle"
+      >⚠️</text>
+      ${textElements}
+    </svg>
+  `;
+
+  const blob = new Blob([svg], { type: "image/svg+xml" });
+  return URL.createObjectURL(blob);
+}
+
+/**
+ * Process decrypted bits and return the final bits and MIME type
  * 
  * PRESERVE PATTERN SUPPORT: If a BMP header was stored during loading,
  * recombines it with the decrypted body to reconstruct the complete BMP file.
  */
-function handleDecryptionSuccess(
+function processDecryptedBits(
   bits: Uint8Array,
-  mimeType: string,
-  setDecryptedImage: (url: string | null) => void,
-  setDecryptionProcessing: (processing: boolean) => void,
-  announce: (message: string, priority: "polite" | "assertive") => void,
-  setShowSuccess: (show: boolean) => void
-) {
-  logger.log("[DecryptionMode] Creating blob from decrypted bits");
-  
+  mimeType: string
+): { finalBits: Uint8Array; finalMimeType: string } {
   // Check if we have a BMP header stored (preserve-pattern decryption)
   const bmpHeader = (window as unknown as { bmpHeaderForDecryption?: Uint8Array }).bmpHeaderForDecryption;
   let finalBits = bits;
+  let finalMimeType = mimeType;
   
   if (bmpHeader) {
     logger.log("[DecryptionMode] Recombining BMP header with decrypted body");
@@ -70,12 +133,46 @@ function handleDecryptionSuccess(
     delete (window as unknown as { bmpHeaderForDecryption?: Uint8Array }).bmpHeaderForDecryption;
     
     // Force BMP MIME type for preserve-pattern decryption
-    mimeType = "image/bmp";
+    finalMimeType = "image/bmp";
   }
   
-  const url = createImageBlobUrl(finalBits, mimeType);
-  logger.log("[DecryptionMode] Setting decrypted image URL", url);
-  setDecryptedImage(url);
+  return { finalBits, finalMimeType };
+}
+
+/**
+ * Handle successful decryption result
+ *
+ * LOSSLESS DECRYPTION: After decryption, the recovered bits are used to
+ * create a Blob URL with the original MIME type (from stored metadata).
+ * This ensures the browser correctly interprets the file format, and the
+ * result is bit-identical to the original file before encryption.
+ * 
+ * The result is cached in the store for the current method.
+ */
+function handleDecryptionSuccess(
+  bits: Uint8Array,
+  mimeType: string,
+  method: EncryptionMethod,
+  updateCacheResult: (method: EncryptionMethod, result: DecryptedResult) => void,
+  setDecryptionProcessing: (processing: boolean) => void,
+  announce: (message: string, priority: "polite" | "assertive") => void,
+  setShowSuccess: (show: boolean) => void
+) {
+  logger.log("[DecryptionMode] Creating blob from decrypted bits");
+  
+  const { finalBits, finalMimeType } = processDecryptedBits(bits, mimeType);
+  
+  const url = createImageBlobUrl(finalBits, finalMimeType);
+  logger.log("[DecryptionMode] Storing decrypted result in cache", { method, url });
+  
+  // Store result in cache
+  updateCacheResult(method, {
+    decryptedImage: url,
+    decryptedBits: finalBits,
+    timestamp: Date.now(),
+  });
+  logger.log("[DecryptionMode] Result stored in cache successfully");
+  
   logger.log("[DecryptionMode] Setting processing to false");
   setDecryptionProcessing(false);
 
@@ -104,7 +201,8 @@ function handleDecryptionError(
 interface WorkerMessageHandlerParams {
   message: WorkerMessage;
   mimeType: string;
-  setDecryptedImage: (url: string | null) => void;
+  method: EncryptionMethod;
+  updateCacheResult: (method: EncryptionMethod, result: DecryptedResult) => void;
   setDecryptionError: (error: string | null) => void;
   setDecryptionProcessing: (processing: boolean) => void;
   announce: (message: string, priority: "polite" | "assertive") => void;
@@ -118,7 +216,8 @@ function handleResultMessage(params: WorkerMessageHandlerParams) {
   const {
     message,
     mimeType,
-    setDecryptedImage,
+    method,
+    updateCacheResult,
     setDecryptionError,
     setDecryptionProcessing,
     announce,
@@ -135,7 +234,8 @@ function handleResultMessage(params: WorkerMessageHandlerParams) {
     handleDecryptionSuccess(
       message.payload.bits,
       mimeType,
-      setDecryptedImage,
+      method,
+      updateCacheResult,
       setDecryptionProcessing,
       announce,
       setShowSuccess
@@ -147,16 +247,36 @@ function handleResultMessage(params: WorkerMessageHandlerParams) {
 
 /**
  * Handle error message from worker
+ * 
+ * Creates an error SVG placeholder and saves it to the cache so the error
+ * is visually displayed in the output area.
  */
 function handleErrorMessage(
   message: WorkerMessage,
+  method: EncryptionMethod,
+  updateCacheResult: (method: EncryptionMethod, result: DecryptedResult) => void,
   setDecryptionError: (error: string | null) => void,
   setDecryptionProcessing: (processing: boolean) => void
 ) {
-  logger.error("[DecryptionMode] Received ERROR from worker", message.payload?.error);
-  setDecryptionError(
-    message.payload?.error || "Decryption failed. Please verify the key and encryption method are correct"
-  );
+  const workerError = message.payload?.error;
+  const guidanceMessage = "Verify that the key, IV, and encryption mode match those used during encryption.";
+  
+  // Build full error message: worker error + guidance, or just guidance if no worker error
+  const fullErrorMessage = workerError 
+    ? `${workerError}. ${guidanceMessage}`
+    : `Decryption failed. ${guidanceMessage}`;
+  
+  logger.error("[DecryptionMode] Received ERROR from worker", fullErrorMessage);
+  
+  // Create error SVG with full message and save to cache so it displays in output
+  const errorSvgUrl = createDecryptionErrorSvg(fullErrorMessage);
+  updateCacheResult(method, {
+    decryptedImage: errorSvgUrl,
+    decryptedBits: new Uint8Array(0), // Empty bits for error state
+    timestamp: Date.now(),
+  });
+  
+  setDecryptionError(fullErrorMessage);
   setDecryptionProcessing(false);
 }
 
@@ -164,14 +284,14 @@ function handleErrorMessage(
  * Handle worker message
  */
 function handleWorkerMessage(params: WorkerMessageHandlerParams) {
-  const { message, setDecryptionError, setDecryptionProcessing } = params;
+  const { message, method, updateCacheResult, setDecryptionError, setDecryptionProcessing } = params;
 
   logger.log("[DecryptionMode] Received message from worker", message.type);
 
   if (message.type === "RESULT" && message.payload?.bits) {
     handleResultMessage(params);
   } else if (message.type === "ERROR") {
-    handleErrorMessage(message, setDecryptionError, setDecryptionProcessing);
+    handleErrorMessage(message, method, updateCacheResult, setDecryptionError, setDecryptionProcessing);
   }
 }
 
@@ -235,41 +355,34 @@ function splitBmpForDecryption(data: Uint8Array): { header: Uint8Array; body: Ui
 }
 
 /**
- * Load and process encrypted image data
+ * Prepare encrypted bits for decryption
  *
- * LOSSLESS DECRYPTION: Loads the complete encrypted file as raw bits,
- * validates the data size for block cipher modes, and prepares it for
- * decryption. 
+ * LOSSLESS DECRYPTION: Validates the data size for block cipher modes
+ * and prepares it for decryption. 
  * 
  * PRESERVE PATTERN SUPPORT: If the file is a BMP (preserve-pattern encryption),
  * splits it into header and body, then decrypts only the body (pixel data).
  * The header is stored separately and will be recombined after decryption.
  */
-async function loadEncryptedImageData(encryptedImage: string, method: string) {
-  logger.log("[DecryptionMode] Fetching encrypted image", encryptedImage);
-  const response = await fetch(encryptedImage);
-  const blob = await response.blob();
-  const arrayBuffer = await blob.arrayBuffer();
-  const fullData = new Uint8Array(arrayBuffer);
-  logger.log("[DecryptionMode] Encrypted data loaded", { 
-    size: fullData.length,
-    firstBytes: Array.from(fullData.slice(0, 4)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' '),
-    blobType: blob.type,
+function prepareEncryptedBitsForDecryption(encryptedBits: Uint8Array, method: string): Uint8Array {
+  logger.log("[DecryptionMode] Preparing encrypted bits for decryption", { 
+    size: encryptedBits.length,
+    firstBytes: Array.from(encryptedBits.slice(0, 4)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' '),
   });
 
   // Check if this is a BMP file (preserve-pattern encryption)
-  const isBmp = isBmpFile(fullData);
+  const isBmp = isBmpFile(encryptedBits);
   logger.log("[DecryptionMode] BMP detection result", { 
     isBmp,
-    byte0: fullData[0],
-    byte1: fullData[1],
+    byte0: encryptedBits[0],
+    byte1: encryptedBits[1],
     expectedByte0: 0x42,
     expectedByte1: 0x4d,
   });
   
   if (isBmp) {
     logger.log("[DecryptionMode] Detected BMP file - using preserve-pattern decryption");
-    const { header, body } = splitBmpForDecryption(fullData);
+    const { header, body } = splitBmpForDecryption(encryptedBits);
     
     // Store header for later recombination
     (window as unknown as { bmpHeaderForDecryption?: Uint8Array }).bmpHeaderForDecryption = header;
@@ -281,8 +394,8 @@ async function loadEncryptedImageData(encryptedImage: string, method: string) {
 
   // Whole-file encryption - decrypt entire file
   logger.log("[DecryptionMode] Using whole-file decryption");
-  validateEncryptedDataSize(method, fullData);
-  return fullData;
+  validateEncryptedDataSize(method, encryptedBits);
+  return encryptedBits;
 }
 
 interface DecryptionParams {
@@ -335,10 +448,39 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     setDecryptionKeySize,
     setDecryptionIV,
     setEncryptedImageForDecryption,
-    setDecryptedImage,
+    setEncryptedBitsForDecryption,
     setDecryptionProcessing,
     setDecryptionError,
+    setDecryptionCache,
+    updateDecryptionCacheResult,
+    updateDecryptionCacheComparison,
   } = useAppStore();
+
+  // Derive current decrypted result from cache (reactive to decryption state changes)
+  const currentDecryptedResult = React.useMemo(() => {
+    const result = decryption.currentCache?.results[decryption.method];
+    logger.log("[DecryptionMode] Current decrypted result derived", {
+      method: decryption.method,
+      hasResult: !!result,
+      url: result?.decryptedImage,
+      cacheKey: decryption.currentCache?.cacheKey,
+    });
+    return result;
+  }, [decryption.currentCache, decryption.method]);
+
+  // Derive current decrypted image URL from cache for convenience
+  const currentDecryptedImage = currentDecryptedResult?.decryptedImage || null;
+
+  // Derive current comparison result from cache (reactive to method changes)
+  const currentCachedComparison = React.useMemo(() => {
+    const comparison = decryption.currentCache?.comparisons?.[decryption.method];
+    logger.log("[DecryptionMode] Current cached comparison derived", {
+      method: decryption.method,
+      hasComparison: !!comparison,
+      identical: comparison?.result?.identical,
+    });
+    return comparison;
+  }, [decryption.currentCache, decryption.method]);
 
   const { announce } = useScreenReaderAnnouncement();
   const workerRef = React.useRef<Worker | null>(null);
@@ -348,13 +490,111 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
 
   const [showSuccess, setShowSuccess] = React.useState(false);
 
-  // Comparison state
+  // Comparison state - local state for UI, cached results in store
   const [comparisonImage, setComparisonImage] = React.useState<string | null>(null);
   const [comparisonFileName, setComparisonFileName] = React.useState<string>("");
-  const [comparisonResult, setComparisonResult] = React.useState<ComparisonResultType | null>(null);
+  const [comparisonImageHash, setComparisonImageHash] = React.useState<string>("");
   const [isComparing, setIsComparing] = React.useState(false);
   const [comparisonError, setComparisonError] = React.useState<string | null>(null);
   const [showCompareSection, setShowCompareSection] = React.useState(false);
+
+  // Derive comparison result from cache - only show if hash matches current comparison image
+  const comparisonResult = React.useMemo(() => {
+    if (!currentCachedComparison || !comparisonImageHash) return null;
+    // Only return cached result if it was computed with the same comparison image
+    if (currentCachedComparison.comparisonImageHash !== comparisonImageHash) {
+      logger.log("[DecryptionMode] Cached comparison hash mismatch, will recompute", {
+        cachedHash: currentCachedComparison.comparisonImageHash,
+        currentHash: comparisonImageHash,
+      });
+      return null;
+    }
+    return currentCachedComparison.result;
+  }, [currentCachedComparison, comparisonImageHash]);
+
+  const shouldAttemptDecryption = React.useCallback(
+    (
+      encryptedBits: Uint8Array | null,
+      key: string | null,
+      isProcessing: boolean,
+      currentCache: typeof decryption.currentCache,
+      method: EncryptionMethod
+    ): encryptedBits is Uint8Array => {
+      if (!encryptedBits || !key || isProcessing) {
+        return false;
+      }
+
+      const cachedResult = currentCache?.results[method];
+      if (cachedResult) {
+        logger.log("[DecryptionMode] Result found in cache, skipping decryption", { method });
+        return false;
+      }
+
+      return true;
+    },
+    [decryption]
+  );
+
+  const validateIVRequirement = React.useCallback((method: EncryptionMethod, iv: string): boolean => {
+    const needsIV = method === "CBC" || method === "CTR";
+    if (needsIV && !iv) {
+      logger.log("[DecryptionMode] IV needed but not available, skipping decryption");
+      return false;
+    }
+    return true;
+  }, []);
+
+  const isDuplicateAttempt = React.useCallback(
+    (attemptKey: string): boolean => {
+      if (decryptionAttemptedRef.current === attemptKey) {
+        logger.log("[DecryptionMode] Already attempted decryption with these inputs, skipping");
+        return true;
+      }
+      return false;
+    },
+    []
+  );
+
+  const executeDecryption = React.useCallback(
+    (
+      encryptedBits: Uint8Array,
+      key: string,
+      method: EncryptionMethod,
+      iv: string
+    ) => {
+      logger.log("[DecryptionMode] Starting decryption process", { method });
+      setDecryptionProcessing(true);
+      setDecryptionError(null);
+
+      try {
+        // Prepare encrypted bits (handles BMP detection for preserve-pattern)
+        const bitsToDecrypt = prepareEncryptedBitsForDecryption(encryptedBits, method);
+        
+        sendDecryptionToWorker({
+          worker: workerRef.current,
+          encryptedBits: bitsToDecrypt,
+          key,
+          method,
+          iv: iv || undefined,
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Decryption failed";
+        logger.error("[DecryptionMode] Error during decryption setup", error);
+        
+        // Create error SVG and save to cache so it displays in output
+        const errorSvgUrl = createDecryptionErrorSvg(errorMessage);
+        updateDecryptionCacheResult(method, {
+          decryptedImage: errorSvgUrl,
+          decryptedBits: new Uint8Array(0),
+          timestamp: Date.now(),
+        });
+        
+        setDecryptionError(errorMessage);
+        setDecryptionProcessing(false);
+      }
+    },
+    [setDecryptionProcessing, setDecryptionError, updateDecryptionCacheResult]
+  );
 
   // Announce processing state changes
   React.useEffect(() => {
@@ -381,7 +621,8 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
       handleWorkerMessage({
         message: event.data,
         mimeType,
-        setDecryptedImage,
+        method: decryption.method,
+        updateCacheResult: updateDecryptionCacheResult,
         setDecryptionError,
         setDecryptionProcessing,
         announce,
@@ -402,11 +643,11 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
         workerRef.current = null;
       }
     };
-  }, [decryption.metadata, setDecryptedImage, setDecryptionError, setDecryptionProcessing, announce]);
+  }, [decryption.metadata, decryption.method, updateDecryptionCacheResult, setDecryptionError, setDecryptionProcessing, announce]);
 
   // Track previous URLs for cleanup
   const prevEncryptedImageRef = React.useRef<string | null>(null);
-  const prevDecryptedImageRef = React.useRef<string | null>(null);
+  const prevCacheRef = React.useRef<typeof decryption.currentCache>(null);
 
   // Cleanup old object URLs when they change
   React.useEffect(() => {
@@ -424,73 +665,105 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     };
   }, [decryption.encryptedImage]);
 
+  // Cleanup decrypted image URLs from cache when cache is completely replaced (different key/IV/image)
   React.useEffect(() => {
-    // Revoke previous decrypted image URL if it changed
-    if (prevDecryptedImageRef.current && prevDecryptedImageRef.current !== decryption.decryptedImage) {
-      URL.revokeObjectURL(prevDecryptedImageRef.current);
-    }
-    prevDecryptedImageRef.current = decryption.decryptedImage;
+    const prevCache = prevCacheRef.current;
+    const currentCache = decryption.currentCache;
 
-    // Cleanup on unmount
+    logger.log("[DecryptionMode] Cache cleanup effect triggered", {
+      hasPrevCache: !!prevCache,
+      hasCurrentCache: !!currentCache,
+      prevCacheKey: prevCache?.cacheKey,
+      currentCacheKey: currentCache?.cacheKey,
+    });
+
+    // Only revoke URLs if the cache key changed (different image/key/IV) or cache was cleared
+    // Don't revoke when cache is just updated with new results (same cache key)
+    const cacheKeyChanged = prevCache && currentCache && prevCache.cacheKey !== currentCache.cacheKey;
+    const cacheCleared = prevCache && !currentCache;
+
+    if (cacheKeyChanged || cacheCleared) {
+      logger.log("[DecryptionMode] Revoking URLs from previous cache", {
+        reason: cacheKeyChanged ? "cache key changed" : "cache cleared",
+      });
+      const allResults = Object.values(prevCache.results)
+        .filter((result): result is NonNullable<typeof result> => Boolean(result));
+      allResults.forEach(result => {
+        logger.log("[DecryptionMode] Revoking URL", result.decryptedImage);
+        URL.revokeObjectURL(result.decryptedImage);
+      });
+    } else {
+      logger.log("[DecryptionMode] Not revoking URLs - cache updated with same key");
+    }
+
+    prevCacheRef.current = currentCache;
+  }, [decryption.currentCache]);
+
+  // Cleanup all URLs only on component unmount (not on re-renders)
+  React.useEffect(() => {
     return () => {
-      if (decryption.decryptedImage) {
-        URL.revokeObjectURL(decryption.decryptedImage);
+      logger.log("[DecryptionMode] Component unmounting - revoking all cached URLs");
+      const cache = prevCacheRef.current;
+      if (cache) {
+        const allResults = Object.values(cache.results)
+          .filter((result): result is NonNullable<typeof result> => Boolean(result));
+        allResults.forEach(result => {
+          logger.log("[DecryptionMode] Revoking URL on unmount", result.decryptedImage);
+          URL.revokeObjectURL(result.decryptedImage);
+        });
       }
     };
-  }, [decryption.decryptedImage]);
+  }, []); // Empty deps - only runs on mount/unmount
 
-  // Auto-execute decryption when all inputs are ready
+  // Auto-execute decryption when encrypted bits and key are ready
   React.useEffect(() => {
-    const { encryptedImage, key, method, isProcessing, iv, decryptedImage } = decryption;
+    const { encryptedBits, key, method, isProcessing, iv, currentCache } = decryption;
 
-    // Don't re-decrypt if we already have a decrypted image
-    if (decryptedImage) {
-      logger.log("[DecryptionMode] Already have decrypted image, skipping");
+    if (!shouldAttemptDecryption(encryptedBits, key, isProcessing, currentCache, method)) {
       return;
     }
 
-    if (!encryptedImage || !key || isProcessing) {
+    // If cache is null but we have encryptedBits and key, we need to initialize the cache first
+    if (!currentCache) {
+      logger.log("[DecryptionMode] Cache is null, initializing before decryption");
+      
+      // Initialize cache asynchronously and let the next effect run handle decryption
+      void generateCacheKey(key + iv, encryptedBits).then(cacheKey => {
+        setDecryptionCache({
+          cacheKey,
+          results: {},
+          comparisons: {},
+        });
+        logger.log("[DecryptionMode] Cache initialized from auto-execute effect", { cacheKey });
+      }).catch((error: unknown) => {
+        logger.error("[DecryptionMode] Failed to generate cache key", error);
+        setDecryptionError("Failed to initialize decryption cache");
+      });
       return;
     }
 
-    // Check if we've already attempted decryption with these exact inputs
-    const attemptKey = `${encryptedImage}|${key}|${method}|${iv || ""}`;
-    if (decryptionAttemptedRef.current === attemptKey) {
-      logger.log("[DecryptionMode] Already attempted decryption with these inputs, skipping");
+    if (!validateIVRequirement(method, iv)) {
       return;
     }
 
-    // Check if IV is needed and available
-    const needsIV = method === "CBC" || method === "CTR";
-    if (needsIV && !iv) {
+    const attemptKey = `${String(encryptedBits.length)}|${key}|${method}|${iv}`;
+    if (isDuplicateAttempt(attemptKey)) {
       return;
     }
 
-    // Mark this attempt
     decryptionAttemptedRef.current = attemptKey;
 
-    // Trigger decryption
-    const performDecryption = async () => {
-      logger.log("[DecryptionMode] Starting decryption process");
-      setDecryptionProcessing(true);
-      setDecryptionError(null);
-
-      try {
-        const encryptedBits = await loadEncryptedImageData(encryptedImage, method);
-        sendDecryptionToWorker({ worker: workerRef.current, encryptedBits, key, method, iv });
-      } catch (error) {
-        logger.error("[DecryptionMode] Error during decryption setup", error);
-        setDecryptionError(
-          error instanceof Error
-            ? error.message
-            : "Decryption failed. Please verify the key and encryption method are correct"
-        );
-        setDecryptionProcessing(false);
-      }
-    };
-
-    void performDecryption();
-  }, [decryption, setDecryptionProcessing, setDecryptionError]);
+    executeDecryption(encryptedBits, key, method, iv);
+  }, [
+    decryption,
+    setDecryptionProcessing,
+    setDecryptionError,
+    setDecryptionCache,
+    shouldAttemptDecryption,
+    validateIVRequirement,
+    isDuplicateAttempt,
+    executeDecryption,
+  ]);
 
   /**
    * Handle encrypted file upload
@@ -498,8 +771,9 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
    * LOSSLESS DECRYPTION WORKFLOW:
    * 1. Read encrypted file as raw bits (no format assumptions)
    * 2. Store bits for decryption
-   * 3. Decryption will use stored metadata to reconstruct original format
-   * 4. Result will be bit-identical to original file
+   * 3. Initialize decryption cache
+   * 4. Decryption will use stored metadata to reconstruct original format
+   * 5. Result will be bit-identical to original file
    *
    * The encrypted file contains the complete encrypted data including
    * all headers and metadata from the original file.
@@ -509,7 +783,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
       try {
         decryptionAttemptedRef.current = null; // Reset attempt tracking
         setDecryptionError(null);
-        setDecryptedImage(null);
+        setDecryptionCache(null); // Clear cache when new file is uploaded
         setEncryptedFileName(file.name);
         setUploadedFileStats({ size: file.size, type: file.type });
 
@@ -517,16 +791,29 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
         const arrayBuffer = await file.arrayBuffer();
         const encryptedBits = new Uint8Array(arrayBuffer);
 
-        // Create Blob URL for storage
+        // Create Blob URL for display
         const blob = new Blob([encryptedBits.buffer], { type: "application/octet-stream" });
         const url = URL.createObjectURL(blob);
 
+        // Store the encrypted bits for decryption
+        setEncryptedBitsForDecryption(encryptedBits);
         setEncryptedImageForDecryption(url);
+
+        // Initialize cache if we have a key
+        if (decryption.key) {
+          const cacheKey = await generateCacheKey(decryption.key + decryption.iv, encryptedBits);
+          setDecryptionCache({
+            cacheKey,
+            results: {},
+            comparisons: {},
+          });
+          logger.log("[DecryptionMode] Cache initialized from file upload", { cacheKey });
+        }
       } catch (error) {
         setDecryptionError(error instanceof Error ? error.message : "Failed to process encrypted file");
       }
     },
-    [setEncryptedImageForDecryption, setDecryptedImage, setDecryptionError]
+    [decryption.key, decryption.iv, setEncryptedImageForDecryption, setEncryptedBitsForDecryption, setDecryptionCache, setDecryptionError]
   );
 
   // Handle image removal
@@ -534,18 +821,24 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     if (decryption.encryptedImage) {
       URL.revokeObjectURL(decryption.encryptedImage);
     }
-    if (decryption.decryptedImage) {
-      URL.revokeObjectURL(decryption.decryptedImage);
+    // Revoke all cached decrypted image URLs
+    if (decryption.currentCache) {
+      const allResults = Object.values(decryption.currentCache.results)
+        .filter((result): result is NonNullable<typeof result> => Boolean(result));
+      allResults.forEach(result => {
+        URL.revokeObjectURL(result.decryptedImage);
+      });
     }
     setEncryptedImageForDecryption(null);
-    setDecryptedImage(null);
+    setEncryptedBitsForDecryption(null);
+    setDecryptionCache(null);
     setEncryptedFileName("");
     setUploadedFileStats(null);
-  }, [decryption.encryptedImage, decryption.decryptedImage, setEncryptedImageForDecryption, setDecryptedImage]);
+  }, [decryption.encryptedImage, decryption.currentCache, setEncryptedImageForDecryption, setEncryptedBitsForDecryption, setDecryptionCache]);
 
   // Handle download decrypted image
   const handleDownloadImage = React.useCallback(() => {
-    if (!decryption.decryptedImage) return;
+    if (!currentDecryptedImage) return;
 
     // Use stored metadata for filename, or fallback to encrypted filename
     const originalFilename = decryption.metadata?.filename || encryptedFileName;
@@ -556,25 +849,31 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     const extension = mimeType.split("/")[1] || "png";
 
     const filename = generateFilename(`decrypted-${baseFilename}`, extension);
-    downloadImage(decryption.decryptedImage, filename);
-  }, [decryption.decryptedImage, decryption.metadata, encryptedFileName]);
+    downloadImage(currentDecryptedImage, filename);
+  }, [currentDecryptedImage, decryption.metadata, encryptedFileName]);
 
   // Handle comparison image upload
   const handleComparisonImageUpload = React.useCallback(async (file: File) => {
     try {
       setComparisonError(null);
-      setComparisonResult(null);
+      // Clear cached comparison for current method when new comparison image is uploaded
+      if (decryption.method) {
+        updateDecryptionCacheComparison(decryption.method, null);
+      }
       setComparisonFileName(file.name);
 
       const arrayBuffer = await file.arrayBuffer();
       const blob = new Blob([arrayBuffer], { type: file.type });
       const url = URL.createObjectURL(blob);
 
+      // Generate hash for tracking this comparison image
+      const newHash = `${url}:${file.name}`;
+      setComparisonImageHash(newHash);
       setComparisonImage(url);
     } catch (error) {
       setComparisonError(error instanceof Error ? error.message : "Failed to process comparison image");
     }
-  }, []);
+  }, [decryption.method, updateDecryptionCacheComparison]);
 
   // Handle comparison image removal
   const handleRemoveComparisonImage = React.useCallback(() => {
@@ -583,24 +882,37 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     }
     setComparisonImage(null);
     setComparisonFileName("");
-    setComparisonResult(null);
+    setComparisonImageHash("");
+    // Clear all cached comparisons when comparison image is removed
+    if (decryption.currentCache) {
+      const methods: EncryptionMethod[] = ["ECB", "CBC", "CTR"];
+      methods.forEach(method => {
+        updateDecryptionCacheComparison(method, null);
+      });
+    }
     setComparisonError(null);
-  }, [comparisonImage]);
+  }, [comparisonImage, decryption.currentCache, updateDecryptionCacheComparison]);
 
   // Handle compare action
   const handleCompare = React.useCallback(async () => {
-    if (!decryption.decryptedImage || !comparisonImage) {
+    if (!currentDecryptedImage || !comparisonImage || !comparisonImageHash) {
       setComparisonError("Please upload an image to compare");
       return;
     }
 
     setIsComparing(true);
     setComparisonError(null);
-    setComparisonResult(null);
 
     try {
-      const result = await compareImageBits(decryption.decryptedImage, comparisonImage);
-      setComparisonResult(result);
+      const result = await compareImageBits(currentDecryptedImage, comparisonImage);
+      
+      // Store comparison result in cache using the current hash from state
+      updateDecryptionCacheComparison(decryption.method, {
+        comparisonImageHash,
+        result,
+        timestamp: Date.now(),
+      });
+      
       announce(
         result.identical
           ? "Images are identical (100% bit-perfect match)"
@@ -614,14 +926,14 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     } finally {
       setIsComparing(false);
     }
-  }, [decryption.decryptedImage, comparisonImage, announce]);
+  }, [currentDecryptedImage, comparisonImage, comparisonImageHash, decryption.method, updateDecryptionCacheComparison, announce]);
 
-  // Auto-compare when both images are ready
+  // Auto-compare when both images are ready and no cached result exists
   React.useEffect(() => {
-    if (decryption.decryptedImage && comparisonImage && !isComparing && !comparisonResult) {
+    if (currentDecryptedImage && comparisonImage && !isComparing && !comparisonResult) {
       void handleCompare();
     }
-  }, [decryption.decryptedImage, comparisonImage, isComparing, comparisonResult, handleCompare]);
+  }, [currentDecryptedImage, comparisonImage, isComparing, comparisonResult, handleCompare]);
 
   // Cleanup comparison image URL on unmount
   React.useEffect(() => {
@@ -705,7 +1017,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
         <div className="flex flex-col gap-4 sm:gap-6">
           <div className={cn("transition-all duration-300", showSuccess && "ring-2 ring-green-500 rounded-lg")}>
             <ImageOutputDisplay
-              imageUrl={decryption.decryptedImage}
+              imageUrl={currentDecryptedImage}
               placeholderText="Decrypted image will appear here"
               isLoading={decryption.isProcessing}
               loadingText="Decrypting..."
@@ -713,7 +1025,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
               className="md:hidden"
             />
             <ImageOutputDisplay
-              imageUrl={decryption.decryptedImage}
+              imageUrl={currentDecryptedImage}
               placeholderText="Decrypted image will appear here"
               isLoading={decryption.isProcessing}
               loadingText="Decrypting..."
@@ -721,7 +1033,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
               className="hidden md:block lg:hidden"
             />
             <ImageOutputDisplay
-              imageUrl={decryption.decryptedImage}
+              imageUrl={currentDecryptedImage}
               placeholderText="Decrypted image will appear here"
               isLoading={decryption.isProcessing}
               loadingText="Decrypting..."
@@ -735,7 +1047,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
               <DownloadButton
                 variant="image"
                 onClick={handleDownloadImage}
-                disabled={!decryption.decryptedImage || decryption.isProcessing}
+                disabled={!currentDecryptedImage || decryption.isProcessing}
                 shortcut="d"
               />
               <Button
@@ -744,7 +1056,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
                 onClick={() => {
                   setShowCompareSection(!showCompareSection);
                 }}
-                disabled={!decryption.decryptedImage || decryption.isProcessing}
+                disabled={!currentDecryptedImage || decryption.isProcessing}
                 className="min-h-[44px] px-4 sm:px-3 py-3 sm:py-2"
               >
                 <GitCompare className="h-4 w-4 mr-2" />
@@ -753,7 +1065,7 @@ export const DecryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
             </div>
 
             {/* Comparison Section */}
-            {showCompareSection && decryption.decryptedImage && (
+            {showCompareSection && currentDecryptedImage && (
               <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
                 {comparisonError && (
                   <ErrorAlert

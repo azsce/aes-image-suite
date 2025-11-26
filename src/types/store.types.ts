@@ -68,6 +68,75 @@ export interface EncryptionCache {
 }
 
 /**
+ * Decrypted result for a specific method
+ *
+ * Stores the decrypted image URL and raw decrypted bits
+ * along with a timestamp for debugging purposes.
+ */
+export interface DecryptedResult {
+  /** Blob URL for displaying decrypted image in UI */
+  decryptedImage: string;
+  /** Raw decrypted bits (actual decrypted data) */
+  decryptedBits: Uint8Array;
+  /** Timestamp when this decryption was performed */
+  timestamp: number;
+}
+
+/**
+ * Cached comparison result for a specific method
+ *
+ * Stores the comparison result between the decrypted image and a comparison image.
+ * This is recalculated when the decrypted result changes or the comparison image changes.
+ */
+export interface CachedComparisonResult {
+  /** The comparison result data */
+  result: ComparisonResult;
+  /** Hash of the comparison image to detect changes */
+  comparisonImageHash: string;
+  /** Timestamp when this comparison was performed */
+  timestamp: number;
+}
+
+/**
+ * Cache for decrypted results of current key+IV+encrypted image combination
+ *
+ * This cache stores all decrypted results for different method combinations
+ * for the current key, IV, and encrypted image. The entire cache is
+ * destroyed when the encryption key, IV, or the encrypted image changes.
+ *
+ * Structure: method → result
+ * Example: cache.results.ECB = { decryptedImage, decryptedBits, timestamp }
+ */
+export interface DecryptionCache {
+  /**
+   * Unique identifier for this cache (SHA-256 hash of key + IV + encrypted image bits)
+   * Used for validation and debugging
+   */
+  cacheKey: string;
+
+  /**
+   * Map of decrypted results: method → result
+   * Each method is lazily computed and cached on first access
+   */
+  results: {
+    ECB?: DecryptedResult;
+    CBC?: DecryptedResult;
+    CTR?: DecryptedResult;
+  };
+
+  /**
+   * Map of comparison results: method → comparison result
+   * Each comparison is lazily computed and cached on first access.
+   * Invalidated when the comparison image changes (tracked by comparisonImageHash).
+   */
+  comparisons: {
+    ECB?: CachedComparisonResult;
+    CBC?: CachedComparisonResult;
+    CTR?: CachedComparisonResult;
+  };
+}
+
+/**
  * Encryption mode state
  *
  * Manages the encryption workflow including input data, encryption parameters,
@@ -110,19 +179,43 @@ export interface EncryptionState {
 
 /**
  * Decryption mode state
+ *
+ * Manages the decryption workflow including input data, decryption parameters,
+ * and cached results for different decryption method combinations.
  */
 export interface DecryptionState {
+  /** Current decryption method (ECB, CBC, or CTR) */
   method: EncryptionMethod;
-  keySize: KeySize; // AES key size in bits (128, 192, or 256)
-  key: string; // hex string
-  iv: string; // hex string
-  encryptedImage: string | null; // data URL
-  decryptedImage: string | null; // data URL
-  encryptedBits: Uint8Array | null; // Encrypted bits
-  decryptedBits: Uint8Array | null; // Decrypted bits
-  metadata: ImageMetadata | null; // Image metadata
+
+  /** AES key size in bits (128, 192, or 256) */
+  keySize: KeySize;
+
+  /** Decryption key as hex string */
+  key: string;
+
+  /** Initialization Vector as hex string */
+  iv: string;
+
+  /** Blob URL for displaying encrypted image in UI */
+  encryptedImage: string | null;
+
+  /** Raw bits of encrypted image file (used for decryption) */
+  encryptedBits: Uint8Array | null;
+
+  /** Image metadata (dimensions, MIME type, filename, size) */
+  metadata: ImageMetadata | null;
+
+  /** Whether decryption is currently in progress */
   isProcessing: boolean;
+
+  /** Error message if decryption failed */
   error: string | null;
+
+  /**
+   * Cache of decrypted results for current key+IV+encrypted image combination
+   * Null when no image/key is loaded or after key/IV/image changes
+   */
+  currentCache: DecryptionCache | null;
 }
 
 /**
@@ -220,18 +313,49 @@ export interface EncryptionActions {
  * Decryption mode actions
  */
 export interface DecryptionActions {
+  /** Set the decryption method (ECB, CBC, or CTR) */
   setDecryptionMethod: (method: EncryptionMethod) => void;
+
+  /** Set the AES key size (128, 192, or 256 bits) */
   setDecryptionKeySize: (keySize: KeySize) => void;
+
+  /** Set the decryption key (hex string) - clears cache */
   setDecryptionKey: (key: string) => void;
+
+  /** Set the decryption IV (hex string) - clears cache */
   setDecryptionIV: (iv: string) => void;
+
+  /** Set the encrypted image Blob URL for display */
   setEncryptedImageForDecryption: (image: string | null) => void;
-  setDecryptedImage: (image: string | null) => void;
+
+  /** Set the encrypted image raw bits - clears cache */
   setEncryptedBitsForDecryption: (bits: Uint8Array | null) => void;
-  setDecryptedBits: (bits: Uint8Array | null) => void;
+
+  /** Set the image metadata */
   setDecryptionMetadata: (metadata: ImageMetadata | null) => void;
+
+  /** Set the processing state */
   setDecryptionProcessing: (isProcessing: boolean) => void;
+
+  /** Set the error message */
   setDecryptionError: (error: string | null) => void;
+
+  /** Reset all decryption state */
   resetDecryption: () => void;
+
+  /** Set the entire decryption cache object */
+  setDecryptionCache: (cache: DecryptionCache | null) => void;
+
+  /**
+   * Update a specific result in the decryption cache
+   */
+  updateDecryptionCacheResult: (method: EncryptionMethod, result: DecryptedResult) => void;
+
+  /**
+   * Update a specific comparison result in the decryption cache
+   * Pass null to clear the comparison result for the method
+   */
+  updateDecryptionCacheComparison: (method: EncryptionMethod, comparison: CachedComparisonResult | null) => void;
 }
 
 /**

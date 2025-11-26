@@ -73,26 +73,16 @@ export function InfoDialog({ isOpen, onClose, title, content }: InfoDialogProps)
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                pre: ({ children, ...props }) => (
-                  <pre {...props} className="whitespace-pre overflow-x-auto">
+                pre: ({ children }) => (
+                  <pre className="whitespace-pre overflow-x-auto">
                     {children}
                   </pre>
                 ),
-                code: ({ children, className, ...props }) => {
-                  const isInline = !className;
-                  if (isInline) {
-                    return (
-                      <code {...props} className={className}>
-                        {children}
-                      </code>
-                    );
-                  }
-                  return (
-                    <code {...props} className={className}>
-                      {children}
-                    </code>
-                  );
-                },
+                code: ({ children, className }) => (
+                  <code className={className}>
+                    {children}
+                  </code>
+                ),
               }}
             >
               {content}

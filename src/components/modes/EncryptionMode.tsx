@@ -557,7 +557,29 @@ export const EncryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
       return;
     }
 
-    const iv = currentCache?.iv || "";
+    // If cache is null but we have originalBits and key (e.g., after key size change),
+    // we need to initialize the cache first before proceeding with encryption
+    if (!currentCache) {
+      logger.log("[EncryptionMode] Cache is null, initializing before encryption");
+      const needsIV = method === "CBC" || method === "CTR";
+      const newIV = needsIV ? generateIV() : "";
+      
+      // Initialize cache asynchronously and let the next effect run handle encryption
+      void generateCacheKey(key, originalBits).then(cacheKey => {
+        setEncryptionCache({
+          cacheKey,
+          iv: newIV,
+          results: {},
+        });
+        logger.log("[EncryptionMode] Cache initialized from auto-execute effect", { cacheKey, iv: newIV });
+      }).catch((error: unknown) => {
+        logger.error("[EncryptionMode] Failed to generate cache key", error);
+        setEncryptionError("Failed to initialize encryption cache");
+      });
+      return;
+    }
+
+    const iv = currentCache.iv || "";
     if (!validateIVRequirement(method, iv)) {
       return;
     }
@@ -578,6 +600,7 @@ export const EncryptionMode = React.forwardRef<HTMLDivElement>((_, ref) => {
     encryption,
     setEncryptionProcessing,
     setEncryptionError,
+    setEncryptionCache,
     shouldAttemptEncryption,
     validateIVRequirement,
     isDuplicateAttempt,
