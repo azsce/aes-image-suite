@@ -83,7 +83,9 @@ export function pkcs7Unpad(data: Uint8Array): Uint8Array {
   validatePaddingData(data);
 
   const paddingLength = data[data.length - 1];
+  // check if padding length is between 1 and 16
   validatePaddingLength(paddingLength);
+  // check if all padding bytes are correct and of size paddingLength
   verifyPaddingBytes(data, paddingLength);
 
   return data.slice(0, data.length - paddingLength);

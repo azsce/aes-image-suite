@@ -22,50 +22,6 @@ import type { EncryptionMethodType } from "@/types/encryption-method.types";
 import { logger } from "@/utils/logger";
 
 /**
- * Create SVG placeholder for ECB encrypted image visualization
- *
- * ECB VISUALIZATION PLACEHOLDER: In production, we show a placeholder message
- * for ECB encrypted images instead of the pattern visualization. This is because
- * the visualization feature is still under development.
- *
- * @param width - Image width
- * @param height - Image height
- * @returns Data URL of SVG placeholder
- */
-function createEcbPlaceholderSvg(width: number, height: number): string {
-  const svg = `
-    <svg width="${String(width)}" height="${String(height)}" xmlns="http://www.w3.org/2000/svg">
-      <rect width="100%" height="100%" fill="#1a1a1a"/>
-      <text 
-        x="50%" 
-        y="45%" 
-        font-family="system-ui, -apple-system, sans-serif" 
-        font-size="24" 
-        fill="#888888" 
-        text-anchor="middle"
-        dominant-baseline="middle"
-      >
-        🔒 ECB Encrypted Image
-      </text>
-      <text 
-        x="50%" 
-        y="55%" 
-        font-family="system-ui, -apple-system, sans-serif" 
-        font-size="16" 
-        fill="#666666" 
-        text-anchor="middle"
-        dominant-baseline="middle"
-      >
-        Pattern visualization coming soon
-      </text>
-    </svg>
-  `;
-
-  const blob = new Blob([svg], { type: "image/svg+xml" });
-  return URL.createObjectURL(blob);
-}
-
-/**
  * Handle successful encryption result
  *
  * LOSSLESS ENCRYPTION: After encryption, the encrypted bits are stored and
@@ -102,17 +58,9 @@ async function handleEncryptionSuccess(
     delete (window as unknown as { bmpHeader?: Uint8Array }).bmpHeader;
   }
 
-  // In production, show placeholder for ECB mode (visualization coming soon)
-  // In development, show actual visualization for all modes
-  let url: string;
-  if (method === "ECB" && !import.meta.env.DEV) {
-    logger.log("[EncryptionMode] Using ECB placeholder (production mode)");
-    url = createEcbPlaceholderSvg(metadata.width, metadata.height);
-  } else {
-    // Visualize encrypted bits as an image to show encryption patterns
-    logger.log("[EncryptionMode] Creating encrypted bits visualization");
-    url = await visualizeEncryptedBits(finalBits, metadata, { method, keySize });
-  }
+  // Visualize encrypted bits as an image to show encryption patterns
+  logger.log("[EncryptionMode] Creating encrypted bits visualization");
+  const url = await visualizeEncryptedBits(finalBits, metadata, { method, keySize });
 
   // Store result in cache
   logger.log("[EncryptionMode] Storing result in cache", { method, approach, url, urlValid: url.startsWith("blob:") });
