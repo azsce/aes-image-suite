@@ -1,0 +1,185 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Corporate Theme (Light) */
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221 83% 53%;
+
+    --radius: 0.5rem;
+
+    /* Method-specific colors (Light Mode) */
+    
+    /* WARNING COLOR: ECB reveals patterns (The Penguin problem). Use Amber/Orange to signal caution. */
+    --method-ecb: 38 92% 50%; 
+    
+    /* STANDARD COLOR: CBC is the safe, standard choice. Use Blue to signal "Default". */
+    --method-cbc: 221 83% 53%; 
+    
+    /* SECURE COLOR: CTR is robust. Use Green to signal "Good/Secure". */
+    --method-ctr: 142 71% 45%; 
+
+    /* Tab navigation colors */
+    --tab-active: 238 84% 61%;
+    --tab-inactive: 215 16% 47%;
+    --tab-hover: 210 40% 96%;
+  }
+
+  .dark {
+    /* Cyberpunk Theme (Dark) */
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 47.4% 11.2%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+
+    /* ACCESSIBILITY: Lightened Neon Purple to ensure readable text against dark backgrounds. */
+    --primary: 263 90% 65%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 263 70% 50%;
+
+    /* Method-specific colors (Dark Mode) */
+    
+    /* WARNING: Bright Amber for high visibility of risky ECB mode */
+    --method-ecb: 48 96% 53%; 
+    
+    /* STANDARD: Soft Blue for safe, standard CBC mode */
+    --method-cbc: 217 91% 60%; 
+    
+    /* SECURE: Vivid Green for secure CTR mode */
+    --method-ctr: 142 76% 36%; 
+
+    /* Tab navigation colors */
+    --tab-active: 189 94% 43%;
+    --tab-inactive: 215 20% 65%;
+    --tab-hover: 217 33% 17%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    @apply h-full w-full overflow-hidden;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Enhanced focus indicators for accessibility */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* Ensure keyboard focus is always visible */
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  a:focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  /* Skip to main content link for keyboard users */
+  .skip-to-main {
+    @apply absolute -top-full left-0 z-50 bg-primary text-primary-foreground px-4 py-2 rounded-md;
+    @apply focus:top-4 focus:left-4 transition-all;
+  }
+}
+
+@layer utilities {
+  .pixelated {
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+  }
+}
+
+/* Custom Scrollbar Styling */
+@layer base {
+  /* Webkit browsers (Chrome, Safari, Edge) */
+  ::-webkit-scrollbar {
+    @apply w-3 h-3;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-100 dark:bg-slate-800 rounded-lg;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 dark:bg-slate-600 rounded-lg transition-colors duration-200;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-400 dark:bg-slate-500;
+  }
+
+  ::-webkit-scrollbar-thumb:active {
+    @apply bg-slate-500 dark:bg-slate-400;
+  }
+
+  /* Thin scrollbar variant for compact areas */
+  .scrollbar-thin::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) hsl(var(--muted) / 0.5);
+  }
+
+  .dark * {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.4) hsl(var(--muted) / 0.3);
+  }
+}

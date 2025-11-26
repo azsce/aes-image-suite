@@ -1,0 +1,14 @@
+version: "0.2"
+language: en
+words:
+  - sonarjs
+  - azsce
+  - aesjs
+  - unpad
+  - unpadded
+  - unpadding
+  - partialize
+  - trimmable
+  - codebook
+  - ciphertext
+  - nodebuffer

@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  sonarqube:
+    image: sonarqube:community
+    container_name: sonarqube-cad
+    ports:
+      - "9000:9000"
+    environment:
+      - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks:
+      - sonarnet
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9000/api/system/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+
+networks:
+  sonarnet:
+    driver: bridge
